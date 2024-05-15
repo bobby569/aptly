@@ -245,13 +245,16 @@ class BaseTest(object):
 
         if hasattr(self, "fixtureCmds"):
             for cmd in self.fixtureCmds:
-                self.run_cmd(cmd)
+                output = self.run_cmd(cmd)
+                print("\n")
+                for line in output.decode("utf-8").split("\n"):
+                    print(f"    {line}")
 
     def sort_lines(self, output):
         return "\n".join(sorted(self.ensure_utf8(output).split("\n")))
 
     def run(self):
-        output = self.run_cmd(self.runCmd, self.expectedCode)
+        output = self.run_cmd(self.runCmd, self.expectedCode).decode("utf-8")
         if self.sortOutput:
             output = self.sort_lines(output)
         self.output = self.output_processor(output)
@@ -342,7 +345,7 @@ class BaseTest(object):
         try:
             self.verify_match(self.get_gold(), self.output,
                               match_prepare=self.outputMatchPrepare)
-        except:  # noqa: E722
+        except Exception:  # noqa: E722
             if self.captureResults:
                 if self.outputMatchPrepare is not None:
                     self.output = self.outputMatchPrepare(self.output)
@@ -352,7 +355,7 @@ class BaseTest(object):
                 raise
 
     def check_cmd_output(self, command, gold_name, match_prepare=None, expected_code=0):
-        output = self.run_cmd(command, expected_code=expected_code)
+        output = self.run_cmd(command, expected_code=expected_code).decode("utf-8")
         try:
             self.verify_match(self.get_gold(gold_name), output, match_prepare)
         except:  # noqa: E722
@@ -439,7 +442,7 @@ class BaseTest(object):
                 diff += "wrong value '%s' for key '%s', expected '%s'\n" % (
                     v, k, b[k])
         if diff:
-            raise Exception("content doesn't match:\n" + diff)
+            raise Exception("content subset doesn't match:\n" + diff)
 
     def ensure_utf8(self, a):
         if isinstance(a, bytes):

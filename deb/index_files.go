@@ -143,19 +143,20 @@ func (file *indexFile) Finalize(signer pgp.Signer) error {
 	}
 
 	if signer != nil {
+		gpgExt := ".gpg"
 		if file.detachedSign {
-			err = signer.DetachedSign(file.tempFilename, file.tempFilename+".gpg")
+			err = signer.DetachedSign(file.tempFilename, file.tempFilename+gpgExt)
 			if err != nil {
 				return fmt.Errorf("unable to detached sign file: %s", err)
 			}
 
 			if file.parent.suffix != "" {
-				file.parent.renameMap[filepath.Join(file.parent.basePath, file.relativePath+file.parent.suffix+".gpg")] =
-					filepath.Join(file.parent.basePath, file.relativePath+".gpg")
+				file.parent.renameMap[filepath.Join(file.parent.basePath, file.relativePath+file.parent.suffix+gpgExt)] =
+					filepath.Join(file.parent.basePath, file.relativePath+gpgExt)
 			}
 
-			err = file.parent.publishedStorage.PutFile(filepath.Join(file.parent.basePath, file.relativePath+file.parent.suffix+".gpg"),
-				file.tempFilename+".gpg")
+			err = file.parent.publishedStorage.PutFile(filepath.Join(file.parent.basePath, file.relativePath+file.parent.suffix+gpgExt),
+				file.tempFilename+gpgExt)
 			if err != nil {
 				return fmt.Errorf("unable to publish file: %s", err)
 			}
@@ -248,7 +249,7 @@ func newIndexFiles(publishedStorage aptly.PublishedStorage, basePath, tempDir, s
 	}
 }
 
-func (files *indexFiles) PackageIndex(component, arch string, udeb, installer bool) *indexFile {
+func (files *indexFiles) PackageIndex(component, arch string, udeb bool, installer bool, distribution string) *indexFile {
 	if arch == ArchitectureSource {
 		udeb = false
 	}
@@ -263,7 +264,11 @@ func (files *indexFiles) PackageIndex(component, arch string, udeb, installer bo
 			if udeb {
 				relativePath = filepath.Join(component, "debian-installer", fmt.Sprintf("binary-%s", arch), "Packages")
 			} else if installer {
-				relativePath = filepath.Join(component, fmt.Sprintf("installer-%s", arch), "current", "images", "SHA256SUMS")
+				if distribution == aptly.DistributionFocal {
+					relativePath = filepath.Join(component, fmt.Sprintf("installer-%s", arch), "current", "legacy-images", "SHA256SUMS")
+				} else {
+					relativePath = filepath.Join(component, fmt.Sprintf("installer-%s", arch), "current", "images", "SHA256SUMS")
+				}
 			} else {
 				relativePath = filepath.Join(component, fmt.Sprintf("binary-%s", arch), "Packages")
 			}

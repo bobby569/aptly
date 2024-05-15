@@ -189,7 +189,12 @@ func NewInstallerPackageFromControlFile(input Stanza, repo *RemoteRepo, componen
 		return nil, err
 	}
 
-	relPath := filepath.Join("dists", repo.Distribution, component, fmt.Sprintf("%s-%s", p.Name, architecture), "current", "images")
+	var relPath string
+	if repo.Distribution == aptly.DistributionFocal {
+		relPath = filepath.Join("dists", repo.Distribution, component, fmt.Sprintf("%s-%s", p.Name, architecture), "current", "legacy-images")
+	} else {
+		relPath = filepath.Join("dists", repo.Distribution, component, fmt.Sprintf("%s-%s", p.Name, architecture), "current", "images")
+	}
 	for i := range files {
 		files[i].downloadPath = relPath
 
@@ -621,9 +626,7 @@ func (p *Package) LinkFromPool(publishedStorage aptly.PublishedStorage, packageP
 			return err
 		}
 
-		publishedDirectory := filepath.Join(prefix, relPath)
-
-		err = publishedStorage.LinkFromPool(publishedDirectory, f.Filename, packagePool, sourcePoolPath, f.Checksums, force)
+		err = publishedStorage.LinkFromPool(prefix, relPath, f.Filename, packagePool, sourcePoolPath, f.Checksums, force)
 		if err != nil {
 			return err
 		}
