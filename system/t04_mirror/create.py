@@ -222,7 +222,10 @@ class CreateMirror18Test(BaseTest):
         "ppaCodename": "maverick",
     }
 
-    runCmd = "aptly mirror create -keyring=aptlytest.gpg mirror18 ppa:gladky-anton/gnuplot"
+    fixtureCmds = [
+        "gpg --no-default-keyring --keyring=ppa.gpg --keyserver=hkp://keyserver.ubuntu.com:80 --recv-keys 5BFCD481D86D5824470E469F9000B1C3A01F726C 02219381E9161C78A46CB2BFA5279A973B1F56C0"
+    ]
+    runCmd = "aptly mirror create -keyring=ppa.gpg mirror18 ppa:gladky-anton/gnuplot"
 
     def outputMatchPrepare(self, s):
         return re.sub(r'Signature made .* using', '', s)
@@ -436,3 +439,17 @@ class CreateMirror32Test(BaseTest):
     def check(self):
         self.check_output()
         self.check_cmd_output("aptly mirror show mirror32", "mirror_show")
+
+
+class CreateMirror33Test(BaseTest):
+    """
+    create mirror: repo with only InRelease file but no verification
+    """
+    configOverride = {"max-tries": 1}
+    runCmd = "aptly mirror create -ignore-signatures mirror33 http://repo.aptly.info/system-tests/nvidia.github.io/libnvidia-container/stable/ubuntu16.04/amd64 ./"
+    fixtureGpg = False
+    requiresGPG2 = False
+
+    def check(self):
+        self.check_output()
+        self.check_cmd_output("aptly mirror show mirror33", "mirror_show")

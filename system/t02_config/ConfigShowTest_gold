@@ -15,6 +15,7 @@
     "gpgDisableVerify": false,
     "gpgProvider": "gpg",
     "downloadSourcePackages": false,
+    "packagePoolStorage": {},
     "skipLegacyPool": false,
     "ppaDistributorID": "ubuntu",
     "ppaCodename": "",
@@ -28,5 +29,10 @@
     "enableMetricsEndpoint": true,
     "logLevel": "debug",
     "logFormat": "default",
-    "serveInAPIMode": true
+    "serveInAPIMode": true,
+    "databaseBackend": {
+        "type": "",
+        "url": "",
+        "dbPath": ""
+    }
 }

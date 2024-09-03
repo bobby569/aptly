@@ -20,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+
 from pathlib import Path
 from uuid import uuid4
 
@@ -127,30 +128,15 @@ class BaseTest(object):
     requiresGPG2 = False
     requiresDot = False
     sortOutput = False
+    debugOutput = False
+    EtcdServer = None
 
     aptlyDir = ".aptly"
     aptlyConfigFile = ".aptly.conf"
     expectedCode = 0
-    configFile = {
-        "rootDir": f"{os.environ['HOME']}/{aptlyDir}",
-        "downloadConcurrency": 4,
-        "downloadSpeedLimit": 0,
-        "downloadRetries": 5,
-        "databaseOpenAttempts": 10,
-        "architectures": [],
-        "dependencyFollowSuggests": False,
-        "dependencyFollowRecommends": False,
-        "dependencyFollowAllVariants": False,
-        "dependencyFollowSource": False,
-        "gpgDisableVerify": False,
-        "gpgDisableSign": False,
-        "ppaDistributorID": "ubuntu",
-        "ppaCodename": "",
-        "enableMetricsEndpoint": True,
-        "logLevel": "debug",
-        "logFormat": "default",
-        "serveInAPIMode": True
-    }
+    databaseType = ""
+    databaseUrl = ""
+
     configOverride = {}
     environmentOverride = {}
 
@@ -176,6 +162,10 @@ class BaseTest(object):
         try:
             self.run()
             self.check()
+        except Exception as exc:
+            if self.debugOutput:
+                print(f"API log:\n{self.debug_output()}")
+            raise exc
         finally:
             self.teardown()
 
@@ -189,7 +179,32 @@ class BaseTest(object):
                 os.environ["HOME"], ".gnupg", "aptlytest.gpg"))
 
     def prepare_default_config(self):
-        cfg = self.configFile.copy()
+        databaseBackend = {
+            "type": self.databaseType,
+            "url": self.databaseUrl,
+        }
+
+        cfg = {
+            "rootDir": f"{os.environ['HOME']}/{self.aptlyDir}",
+            "downloadConcurrency": 4,
+            "downloadSpeedLimit": 0,
+            "downloadRetries": 5,
+            "databaseOpenAttempts": 10,
+            "architectures": [],
+            "dependencyFollowSuggests": False,
+            "dependencyFollowRecommends": False,
+            "dependencyFollowAllVariants": False,
+            "dependencyFollowSource": False,
+            "gpgDisableVerify": False,
+            "gpgDisableSign": False,
+            "ppaDistributorID": "ubuntu",
+            "ppaCodename": "",
+            "enableMetricsEndpoint": True,
+            "logLevel": "debug",
+            "logFormat": "default",
+            "serveInAPIMode": True,
+            "databaseBackend": databaseBackend,
+        }
         if self.requiresGPG1:
             cfg["gpgProvider"] = "gpg1"
         elif self.requiresGPG2:
@@ -226,9 +241,27 @@ class BaseTest(object):
             shutil.copytree(self.fixturePoolDir, os.path.join(
                 os.environ["HOME"], self.aptlyDir, "pool"), ignore=shutil.ignore_patterns(".git"))
 
-        if self.fixtureDB:
-            shutil.copytree(self.fixtureDBDir, os.path.join(
-                os.environ["HOME"], self.aptlyDir, "db"))
+        if self.databaseType == "etcd":
+            if not os.path.exists("/srv/etcd"):
+                self.run_cmd([os.path.join(os.path.dirname(inspect.getsourcefile(BaseTest)), "t13_etcd/install-etcd.sh")])
+
+        if self.fixtureDB and self.databaseType != "etcd":
+            shutil.copytree(self.fixtureDBDir, os.path.join(os.environ["HOME"], self.aptlyDir, "db"))
+
+        if self.databaseType == "etcd":
+            if self.EtcdServer:
+                self.shutdown_etcd()
+
+            # remove existing database
+            if os.path.exists("/tmp/etcd-data"):
+                shutil.rmtree("/tmp/etcd-data")
+
+            if self.fixtureDB:
+                print("import etcd")
+                self.run_cmd(["/srv/etcd/etcdctl", "--data-dir=/tmp/etcd-data", "snapshot", "restore", os.path.join(os.environ["HOME"], "etcd.db")])
+
+            print("starting etcd")
+            self.EtcdServer = self._start_process([os.path.join(os.path.dirname(inspect.getsourcefile(BaseTest)), "t13_etcd/start-etcd.sh")], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         if self.fixtureWebServer:
             self.webServerUrl = self.start_webserver(os.path.join(os.path.dirname(inspect.getsourcefile(self.__class__)),
@@ -246,15 +279,15 @@ class BaseTest(object):
         if hasattr(self, "fixtureCmds"):
             for cmd in self.fixtureCmds:
                 output = self.run_cmd(cmd)
-                print("\n")
-                for line in output.decode("utf-8").split("\n"):
+                print("fixture Output:\n")
+                for line in output.split("\n"):
                     print(f"    {line}")
 
     def sort_lines(self, output):
         return "\n".join(sorted(self.ensure_utf8(output).split("\n")))
 
     def run(self):
-        output = self.run_cmd(self.runCmd, self.expectedCode).decode("utf-8")
+        output = self.run_cmd(self.runCmd, self.expectedCode)
         if self.sortOutput:
             output = self.sort_lines(output)
         self.output = self.output_processor(output)
@@ -272,6 +305,7 @@ class BaseTest(object):
                 params['url'] = self.webServerUrl
 
             command = string.Template(command).substitute(params)
+            print(f"running command: {command}\n")
             command = shlex.split(command)
 
         if command[0] == "aptly":
@@ -288,6 +322,8 @@ class BaseTest(object):
             proc = self._start_process(command, stdout=subprocess.PIPE)
             raw_output, _ = proc.communicate()
 
+            raw_output = raw_output.decode("utf-8", errors='replace')
+
             returncodes = [proc.returncode]
             is_aptly_command = False
             if isinstance(command, str):
@@ -299,12 +335,12 @@ class BaseTest(object):
             if is_aptly_command:
                 # remove the last two rows as go tests always print PASS/FAIL and coverage in those
                 # two lines. This would otherwise fail the tests as they would not match gold
-                match = re.search(r"EXIT: (\d)\n.*\n.*coverage: .*", raw_output.decode("utf-8"))
-                if match is None:
-                    raise Exception("no matches found in output '%s'" % raw_output.decode("utf-8"))
+                matches = re.findall(r"((.|\n)*)EXIT: (\d)\n.*\ncoverage: .*", raw_output)
+                if not matches:
+                    raise Exception("no matches found in output '%s'" % raw_output)
 
-                output = match.string[:match.start()].encode()
-                returncodes.append(int(match.group(1)))
+                output, _, returncode = matches[0]
+                returncodes.append(int(returncode))
             else:
                 output = raw_output
 
@@ -355,7 +391,7 @@ class BaseTest(object):
                 raise
 
     def check_cmd_output(self, command, gold_name, match_prepare=None, expected_code=0):
-        output = self.run_cmd(command, expected_code=expected_code).decode("utf-8")
+        output = self.run_cmd(command, expected_code=expected_code)
         try:
             self.verify_match(self.get_gold(gold_name), output, match_prepare)
         except:  # noqa: E722
@@ -476,7 +512,8 @@ class BaseTest(object):
         self.prepare_fixture()
 
     def teardown(self):
-        pass
+        if self.EtcdServer:
+            self.shutdown_etcd()
 
     def start_webserver(self, directory):
         FileHTTPServerRequestHandler.rootPath = directory
@@ -492,9 +529,17 @@ class BaseTest(object):
     def shutdown(self):
         if hasattr(self, 'webserver'):
             self.shutdown_webserver()
+        if self.EtcdServer:
+            self.shutdown_etcd()
 
     def shutdown_webserver(self):
         self.webserver.shutdown()
+
+    def shutdown_etcd(self):
+        print("stopping etcd")
+        self.EtcdServer.terminate()
+        self.EtcdServer.wait()
+        self.EtcdServer = None
 
     @classmethod
     def shutdown_class(cls):

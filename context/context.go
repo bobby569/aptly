@@ -3,6 +3,7 @@ package context
 
 import (
 	gocontext "context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/aptly-dev/aptly/azure"
 	"github.com/aptly-dev/aptly/console"
 	"github.com/aptly-dev/aptly/database"
+	"github.com/aptly-dev/aptly/database/etcddb"
 	"github.com/aptly-dev/aptly/database/goleveldb"
 	"github.com/aptly-dev/aptly/deb"
 	"github.com/aptly-dev/aptly/files"
@@ -287,8 +289,18 @@ func (context *AptlyContext) Database() (database.Storage, error) {
 func (context *AptlyContext) _database() (database.Storage, error) {
 	if context.database == nil {
 		var err error
-
-		context.database, err = goleveldb.NewDB(context.dbPath())
+		switch context.config().DatabaseBackend.Type {
+		case "leveldb":
+			if len(context.config().DatabaseBackend.DbPath) == 0 {
+				return nil, errors.New("leveldb databaseBackend config invalid")
+			}
+			dbPath := filepath.Join(context.config().RootDir, context.config().DatabaseBackend.DbPath)
+			context.database, err = goleveldb.NewDB(dbPath)
+		case "etcd":
+			context.database, err = etcddb.NewDB(context.config().DatabaseBackend.URL)
+		default:
+			context.database, err = goleveldb.NewDB(context.dbPath())
+		}
 		if err != nil {
 			return nil, fmt.Errorf("can't instantiate database: %s", err)
 		}
@@ -361,7 +373,26 @@ func (context *AptlyContext) PackagePool() aptly.PackagePool {
 	defer context.Unlock()
 
 	if context.packagePool == nil {
-		context.packagePool = files.NewPackagePool(context.config().RootDir, !context.config().SkipLegacyPool)
+		storageConfig := context.config().PackagePoolStorage
+		if storageConfig.Azure != nil {
+			var err error
+			context.packagePool, err = azure.NewPackagePool(
+				storageConfig.Azure.AccountName,
+				storageConfig.Azure.AccountKey,
+				storageConfig.Azure.Container,
+				storageConfig.Azure.Prefix,
+				storageConfig.Azure.Endpoint)
+			if err != nil {
+				Fatal(err)
+			}
+		} else {
+			poolRoot := context.config().PackagePoolStorage.Local.Path
+			if poolRoot == "" {
+				poolRoot = filepath.Join(context.config().RootDir, "pool")
+			}
+
+			context.packagePool = files.NewPackagePool(poolRoot, !context.config().SkipLegacyPool)
+		}
 	}
 
 	return context.packagePool
@@ -566,6 +597,9 @@ func (context *AptlyContext) Shutdown() {
 			context.fileMemProfile.Close()
 			context.fileMemProfile = nil
 		}
+	}
+	if context.taskList != nil {
+		context.taskList.Stop()
 	}
 	if context.database != nil {
 		context.database.Close()
